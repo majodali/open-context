@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Walkthrough generated files
+examples/walkthrough/*-state.json
+
+# Claude Code
+.claude/
+
+# Environment
+.env
+.env.*
