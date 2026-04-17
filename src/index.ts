@@ -86,6 +86,26 @@ export {
   AgentActionExecutor,
   type AgentExecutorConfig,
 } from './execution/agent-executor.js';
+export {
+  type ToolDefinition,
+  type ToolExecutor,
+  type ToolExecutionContext,
+  type ToolResult,
+  type ToolCallRequest,
+  type ToolCallResponse,
+  ToolRegistry,
+  type UserInputHandler,
+  createUserInputTool,
+  DefaultResponseUserInputHandler,
+  StrictUserInputHandler,
+  QueuedUserInputHandler,
+} from './execution/tools.js';
+export {
+  validateAgainstSchema,
+  type SchemaValidationResult,
+  type SchemaValidationError,
+} from './execution/json-schema.js';
+export { type AgentTurn } from './processing/agent-adapter.js';
 
 // Internal imports for OpenContext class
 import type {

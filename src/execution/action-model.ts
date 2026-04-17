@@ -55,6 +55,20 @@ export interface ActionDefinition {
    */
   outputs: ActionPort[];
 
+  /**
+   * JSON Schema (draft 2020-12) describing the structure of the action's
+   * complete output object. The output object has properties matching
+   * the names of declared output ports.
+   *
+   * When present, the executor validates the agent's response against this schema
+   * automatically (in addition to any explicit 'schema' validations).
+   * For agent performers, the schema is also included in the prompt so the agent
+   * knows the expected output structure.
+   *
+   * Example: { type: "object", properties: { response: { type: "string" }, score: { type: "number" } }, required: ["response"] }
+   */
+  outputSchema?: Record<string, unknown>;
+
   // -- Execution --
 
   /** Who/what performs this action. */
@@ -212,25 +226,68 @@ export interface ActionParameter {
 }
 
 /**
+ * How a validation failure should be handled.
+ * - 'feedback-and-retry': append validation feedback to context, re-invoke agent
+ *   (within action's maxAttempts budget). Useful when the agent can self-correct.
+ * - 'report-failure': propagate the failure to the parent context immediately.
+ *   The parent context decides whether to replan, retry, or escalate.
+ * - 'try-alternative': invoke the configured alternative action.
+ *   Requires `alternativeActionId` to be set on the validation.
+ */
+export type ValidationFailureMode =
+  | 'feedback-and-retry'
+  | 'report-failure'
+  | 'try-alternative';
+
+/**
+ * Validation method types.
+ * - 'assertion': programmatic check against the output
+ * - 'schema': JSON schema validation against the output structure
+ * - 'agent-review': an agent evaluates the output against the description
+ * - 'human-review': a human evaluates (via the user-interaction tool)
+ * - 'test': an automated test is run
+ * - 'delegated': another action is invoked to perform the validation
+ *   (allows complex or domain-specific validation)
+ */
+export type ValidationMethod =
+  | 'assertion'
+  | 'schema'
+  | 'agent-review'
+  | 'human-review'
+  | 'test'
+  | 'delegated';
+
+/**
  * Validation criterion for an action's outputs.
- * Can be formal or descriptive.
+ * Can be formal (schema, assertion, test) or descriptive (agent/human review).
  */
 export interface ActionValidation {
   id: string;
   /** What to validate. */
   description: string;
-  /**
-   * How to validate:
-   * - 'assertion': a programmatic check (expression evaluated against output)
-   * - 'agent-review': an agent evaluates the output against the description
-   * - 'human-review': a human evaluates
-   * - 'test': an automated test is run
-   */
-  method: 'assertion' | 'agent-review' | 'human-review' | 'test';
-  /** For assertions: the expression to evaluate. */
+  /** How to validate. See ValidationMethod for details. */
+  method: ValidationMethod;
+  /** For 'assertion': the expression to evaluate. */
   expression?: string;
-  /** Whether failure of this validation should halt execution. */
+  /** For 'schema': JSON Schema (draft 2020-12) to validate the output against. */
+  schema?: Record<string, unknown>;
+  /** For 'delegated': the action ID to invoke for validation. */
+  delegatedActionId?: string;
+  /**
+   * Whether failure of this validation should halt execution.
+   * If true, the action cannot complete successfully without this validation passing.
+   */
   blocking: boolean;
+  /**
+   * How to handle a validation failure. Default: 'report-failure'.
+   * Only used when blocking is true (non-blocking failures are recorded but ignored).
+   */
+  onFailure?: ValidationFailureMode;
+  /**
+   * For 'try-alternative' onFailure: the action ID to invoke instead.
+   * If not set on validation, falls back to ActionDefinition.alternatives[0].
+   */
+  alternativeActionId?: string;
 }
 
 /**
