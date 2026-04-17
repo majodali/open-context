@@ -332,6 +332,12 @@ export interface ChunkOptions {
   maxChunkSize: number;
   preserveContext: boolean;
   contentType?: string;
+  /**
+   * If true, the entire content is returned as a single chunk verbatim
+   * (no splitting, no whitespace normalization). Use for structured content
+   * like JSON where exact formatting must be preserved.
+   */
+  noChunking?: boolean;
 }
 
 export interface ChunkResult {

@@ -106,6 +106,31 @@ export {
   type SchemaValidationError,
 } from './execution/json-schema.js';
 export { type AgentTurn } from './processing/agent-adapter.js';
+export {
+  RecursionGuard,
+  type RecursionGuardConfig,
+  type ObjectiveLineage,
+  type CycleCheckResult,
+  DEFAULT_MAX_RECURSION_DEPTH,
+  DEFAULT_CYCLE_SIMILARITY_THRESHOLD,
+} from './execution/recursion-safety.js';
+export {
+  acquireResourceType,
+  acquireResource,
+  acquireRelationshipType,
+  acquireRelationship,
+  acquireActionDefinition,
+  extractResourceType,
+  extractResource,
+  extractRelationshipType,
+  extractRelationship,
+  extractActionDefinition,
+  findResourceTypeById,
+  findResourceById,
+  findActionDefinitionById,
+  listActionDefinitions,
+  findResourcesByType,
+} from './execution/storage-helpers.js';
 
 // Internal imports for OpenContext class
 import type {

@@ -29,6 +29,15 @@ export class DefaultChunker implements Chunker {
 
   chunk(content: string, options?: Partial<ChunkOptions>): ChunkResult[] {
     const opts = { ...DEFAULT_OPTIONS, ...options };
+
+    // noChunking: return content verbatim as a single chunk.
+    // Useful for structured content (JSON, YAML, code) where exact
+    // formatting must be preserved.
+    if (opts.noChunking) {
+      const trimmed = content.trim();
+      return trimmed.length > 0 ? [{ content, index: 0 }] : [];
+    }
+
     const trimmed = content.trim();
     if (!trimmed) return [];
 
