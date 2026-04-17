@@ -106,6 +106,113 @@ describe('QueryConstructor', () => {
     expect(purposes).toContain('plan-context');
   });
 
+  it('uses action-defined query templates when provided', () => {
+    const qc = new QueryConstructor();
+    const action = makeAction({
+      queryTemplates: [
+        {
+          purpose: 'auth-requirements',
+          query: 'Authentication requirements and security rules for {{auth-spec}}',
+          maxResults: 10,
+          contentTypes: ['rule', 'fact'],
+          priority: 10,
+        },
+        {
+          purpose: 'testing-methodology',
+          query: 'Testing methodology: BDD, Given-When-Then, specification by example, behavior tests',
+          maxResults: 8,
+          contentTypes: ['instruction', 'rule'],
+          priority: 8,
+        },
+        {
+          purpose: 'db-schema',
+          query: 'Database schema for {{db-schema}}',
+          maxResults: 5,
+          priority: 6,
+        },
+      ],
+    });
+
+    const constructed = qc.construct(action, null, 'test-ctx');
+
+    // Should use templates, not auto-generated queries
+    const purposes = constructed.retrievals.map((r) => r.purpose);
+    expect(purposes).toContain('auth-requirements');
+    expect(purposes).toContain('testing-methodology');
+    expect(purposes).toContain('db-schema');
+
+    // Should NOT contain auto-generated purposes
+    expect(purposes).not.toContain('primary-context');
+    expect(purposes).not.toContain('practices-and-methodology');
+
+    // Should still auto-add learnings
+    expect(purposes).toContain('learnings');
+  });
+
+  it('resolves {{placeholder}} references in query templates', () => {
+    const qc = new QueryConstructor();
+    const action = makeAction({
+      queryTemplates: [
+        {
+          purpose: 'test',
+          query: 'Find information about {{data}} for the task',
+          priority: 5,
+        },
+      ],
+    });
+
+    // With resolved input values
+    const constructed = qc.construct(action, null, 'test-ctx', {
+      data: 'user authentication tokens',
+    });
+
+    const testRetrieval = constructed.retrievals.find((r) => r.purpose === 'test');
+    expect(testRetrieval).toBeDefined();
+    expect(testRetrieval!.query).toContain('user authentication tokens');
+    expect(testRetrieval!.query).not.toContain('{{data}}');
+  });
+
+  it('falls back to port description when input not resolved', () => {
+    const qc = new QueryConstructor();
+    const action = makeAction({
+      queryTemplates: [
+        {
+          purpose: 'test',
+          query: 'Schema for {{data}}',
+          priority: 5,
+        },
+      ],
+    });
+
+    // No resolved inputs — should fall back to port description
+    const constructed = qc.construct(action, null, 'test-ctx');
+    const testRetrieval = constructed.retrievals.find((r) => r.purpose === 'test');
+    expect(testRetrieval!.query).toContain('Input data');
+  });
+
+  it('auto-adds plan context for template-based queries when objective provided', () => {
+    const qc = new QueryConstructor();
+    const action = makeAction({
+      queryTemplates: [
+        { purpose: 'custom', query: 'Custom query', priority: 5 },
+      ],
+    });
+    const objective = {
+      id: 'obj',
+      name: 'Test Objective',
+      description: 'Do the thing',
+      contextId: 'test-ctx',
+      acceptanceCriteria: ['It works'],
+      isLearningObjective: false,
+      priority: 1,
+      status: 'executing' as const,
+    };
+
+    const constructed = qc.construct(action, objective, 'test-ctx');
+    const purposes = constructed.retrievals.map((r) => r.purpose);
+    expect(purposes).toContain('plan-context');
+  });
+
   it('retrieval requests are sorted by priority', () => {
     const qc = new QueryConstructor();
     const action = makeAction();

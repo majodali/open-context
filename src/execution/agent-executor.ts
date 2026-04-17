@@ -101,6 +101,7 @@ export class AgentActionExecutor implements ActionExecutor {
         action,
         objective,
         action.contextId,
+        resolvedInputs,
       );
 
       // 2. Execute queries against the retriever

@@ -97,6 +97,22 @@ export interface ActionDefinition {
   /** Expected value of the output (arbitrary units, for prioritization). */
   estimatedValue?: number;
 
+  // -- Knowledge Retrieval --
+
+  /**
+   * Query templates that define what knowledge this action needs.
+   * When provided, these are used instead of (or in addition to) the
+   * QueryConstructor's auto-generated queries.
+   *
+   * Each template specifies a purpose, a query pattern, and optional
+   * filters. Query patterns can include placeholders referencing
+   * action inputs, e.g., "Authentication requirements for {{auth-spec}}".
+   *
+   * Over time, query templates are refined based on feedback about
+   * what knowledge was actually useful vs. missing.
+   */
+  queryTemplates?: ActionQueryTemplate[];
+
   // -- Metadata --
 
   /** Tags for classification and retrieval. */
@@ -106,6 +122,34 @@ export interface ActionDefinition {
    * The planner may choose between alternatives based on context.
    */
   alternatives?: string[];
+}
+
+/**
+ * A query template attached to an action definition.
+ * Defines a specific knowledge retrieval to perform before execution.
+ */
+export interface ActionQueryTemplate {
+  /** Purpose identifier — used in feedback tracking. */
+  purpose: string;
+  /**
+   * The query text. May contain {{placeholder}} references to input port
+   * names, which are resolved from the action's inputs before execution.
+   * e.g., "Testing methodology for {{auth-spec}} using BDD approach"
+   */
+  query: string;
+  /** Maximum units to retrieve for this query. */
+  maxResults?: number;
+  /** Content type filter. */
+  contentTypes?: string[];
+  /** Tag filter — units must have at least one of these tags. */
+  tags?: string[];
+  /**
+   * Override the context to query from. If not set, uses the action's contextId.
+   * Can be 'root' to query from the root context (useful for cross-cutting concerns).
+   */
+  contextOverride?: string;
+  /** Priority relative to other templates (higher = more important). */
+  priority?: number;
 }
 
 /**

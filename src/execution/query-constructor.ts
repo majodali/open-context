@@ -12,7 +12,7 @@
  * or augment this with learned retrieval.
  */
 
-import type { ActionDefinition, ActionPort } from './action-model.js';
+import type { ActionDefinition, ActionPort, ActionQueryTemplate } from './action-model.js';
 import type { Objective } from './plan-dag.js';
 import type { RetrievalOptions, RetrievalResult, ScoredUnit, ContentType } from '../core/types.js';
 import type { Retriever } from '../retrieval/retriever.js';
@@ -100,6 +100,115 @@ export class QueryConstructor {
    * Build queries from an action definition and its execution context.
    */
   construct(
+    action: ActionDefinition,
+    objective: Objective | null,
+    contextId: string,
+    /** Resolved input values for template placeholder substitution. */
+    resolvedInputs?: Record<string, unknown>,
+  ): ConstructedQuery {
+    // If the action defines its own query templates, use those
+    // (optionally supplemented by auto-generated queries)
+    if (action.queryTemplates && action.queryTemplates.length > 0) {
+      return this.constructFromTemplates(action, objective, contextId, resolvedInputs);
+    }
+
+    // Otherwise, auto-generate queries from action metadata
+    return this.constructAuto(action, objective, contextId);
+  }
+
+  /**
+   * Build queries from action-defined templates.
+   * Templates take precedence; auto-generated queries fill gaps.
+   */
+  private constructFromTemplates(
+    action: ActionDefinition,
+    objective: Objective | null,
+    contextId: string,
+    resolvedInputs?: Record<string, unknown>,
+  ): ConstructedQuery {
+    const retrievals: RetrievalRequest[] = [];
+
+    for (const template of action.queryTemplates!) {
+      const query = this.resolveTemplatePlaceholders(template.query, action, resolvedInputs);
+      retrievals.push({
+        query,
+        purpose: template.purpose,
+        options: {
+          contextId: template.contextOverride ?? contextId,
+          maxResults: template.maxResults ?? this.config.maxUnitsPerRetrieval,
+          contentTypes: template.contentTypes as ContentType[] | undefined,
+          tags: template.tags,
+        },
+        priority: template.priority ?? 5,
+      });
+    }
+
+    // Always add learnings query if not already covered by templates
+    const hasLearnings = retrievals.some((r) => r.purpose === 'learnings');
+    if (!hasLearnings) {
+      retrievals.push({
+        query: `Previous learnings and insights for ${action.name}: outcomes, improvements, issues`,
+        purpose: 'learnings',
+        options: {
+          contextId,
+          maxResults: Math.ceil(this.config.maxUnitsPerRetrieval * 0.5),
+          contentTypes: ['learning', 'insight'],
+        },
+        priority: 3,
+      });
+    }
+
+    // Add plan context if objective provided and not covered
+    const hasPlan = retrievals.some((r) => r.purpose === 'plan-context');
+    if (objective && !hasPlan) {
+      retrievals.push({
+        query: `Plan and objectives: ${objective.name}. ${objective.description}. Acceptance criteria: ${objective.acceptanceCriteria.join('; ')}`,
+        purpose: 'plan-context',
+        options: {
+          contextId: objective.contextId,
+          maxResults: Math.ceil(this.config.maxUnitsPerRetrieval * 0.5),
+          contentTypes: ['plan', 'objective', 'expectation', 'hypothesis'],
+        },
+        priority: 2,
+      });
+    }
+
+    retrievals.sort((a, b) => b.priority - a.priority);
+
+    return {
+      retrievals,
+      actionId: action.id,
+      contextId,
+      maxTotalUnits: this.config.maxTotalUnits,
+    };
+  }
+
+  /**
+   * Resolve {{placeholder}} references in a query template.
+   * Placeholders reference input port names.
+   */
+  private resolveTemplatePlaceholders(
+    query: string,
+    action: ActionDefinition,
+    resolvedInputs?: Record<string, unknown>,
+  ): string {
+    return query.replace(/\{\{(\w+(?:-\w+)*)\}\}/g, (match, name) => {
+      // Try resolved input values first
+      if (resolvedInputs && name in resolvedInputs) {
+        const val = resolvedInputs[name];
+        return typeof val === 'string' ? val : JSON.stringify(val);
+      }
+      // Fall back to input port description
+      const port = action.inputs.find((p) => p.name === name);
+      if (port) return port.description;
+      return match; // Leave unresolved
+    });
+  }
+
+  /**
+   * Auto-generate queries from action metadata (the default/fallback).
+   */
+  private constructAuto(
     action: ActionDefinition,
     objective: Objective | null,
     contextId: string,
