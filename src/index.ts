@@ -107,6 +107,15 @@ export {
 } from './execution/json-schema.js';
 export { type AgentTurn } from './processing/agent-adapter.js';
 export {
+  buildMetaActions,
+  META_ACTION_IDS,
+} from './execution/meta-actions.js';
+export {
+  Orchestrator,
+  type OrchestratorConfig,
+  type OrchestrationResult,
+} from './execution/orchestrator.js';
+export {
   RecursionGuard,
   type RecursionGuardConfig,
   type ObjectiveLineage,
@@ -187,6 +196,8 @@ import { ConfigResolver } from './core/config-resolver.js';
 import { OPENCONTEXT_SEED, getSeedAcquireOptions } from './core/seed-content.js';
 import { PlanManager } from './planning/plan-manager.js';
 import type { Plan, EvaluationResult, PlanRevision } from './planning/types.js';
+import { buildMetaActions } from './execution/meta-actions.js';
+import { acquireActionDefinition } from './execution/storage-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -401,6 +412,21 @@ export class OpenContext {
         contextId,
         getSeedAcquireOptions(seedUnit),
       );
+      allUnits.push(...units);
+    }
+    return allUnits;
+  }
+
+  /**
+   * Acquire the six orchestration meta-actions into the specified context
+   * (typically the same as the seed context). The orchestrator looks them
+   * up by ID when building meta-plans.
+   */
+  async seedMetaActions(contextId: string): Promise<SemanticUnit[]> {
+    const metaActions = buildMetaActions(contextId);
+    const allUnits: SemanticUnit[] = [];
+    for (const action of metaActions) {
+      const units = await acquireActionDefinition(action, this.getAcquisitionDeps());
       allUnits.push(...units);
     }
     return allUnits;

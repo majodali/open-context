@@ -585,20 +585,55 @@ export class DAGEngine {
 
   /**
    * Check if there are any pending nodes whose inputs could still be satisfied.
-   * A pending node is blocked if any of its upstream dependencies have failed.
+   * A pending node is blocked if any of its transitive upstream dependencies
+   * has failed. Performs a transitive walk, not just direct upstream check.
    */
   private hasUnblockedPendingNodes(dag: PlanDAG): boolean {
+    // Memoize blocking status per node
+    const blockingStatus = new Map<string, boolean>();
+
+    const isBlocked = (nodeId: string, visiting: Set<string>): boolean => {
+      const cached = blockingStatus.get(nodeId);
+      if (cached !== undefined) return cached;
+
+      // Guard against cycles (shouldn't happen in a DAG, but defensive)
+      if (visiting.has(nodeId)) return false;
+      visiting.add(nodeId);
+
+      const node = dag.nodes.get(nodeId);
+      if (!node) {
+        blockingStatus.set(nodeId, true);
+        return true;
+      }
+
+      // A failed node blocks anything downstream
+      if (node.status === 'failed') {
+        blockingStatus.set(nodeId, true);
+        return true;
+      }
+
+      // Completed/skipped nodes don't block
+      if (node.status === 'completed' || node.status === 'skipped') {
+        blockingStatus.set(nodeId, false);
+        return false;
+      }
+
+      // Pending/ready/executing/etc: check all upstream edges transitively
+      const upstreamEdges = dag.edges.filter((e) => e.targetNodeId === nodeId);
+      for (const edge of upstreamEdges) {
+        if (isBlocked(edge.sourceNodeId, visiting)) {
+          blockingStatus.set(nodeId, true);
+          return true;
+        }
+      }
+
+      blockingStatus.set(nodeId, false);
+      return false;
+    };
+
     for (const node of dag.nodes.values()) {
       if (node.status !== 'pending') continue;
-
-      // Check if all upstream dependencies are either completed or still possible
-      const upstreamEdges = dag.edges.filter((e) => e.targetNodeId === node.id);
-      const blocked = upstreamEdges.some((edge) => {
-        const source = dag.nodes.get(edge.sourceNodeId);
-        return source && source.status === 'failed';
-      });
-
-      if (!blocked) return true; // This node could still execute
+      if (!isBlocked(node.id, new Set())) return true;
     }
     return false;
   }
