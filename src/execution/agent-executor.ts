@@ -217,7 +217,9 @@ export class AgentActionExecutor implements ActionExecutor {
             usedUnits: feedback.usedUnits.length,
             unusedUnits: feedback.unusedUnits.length,
             missingInfo: feedback.missingInformation.length,
-            additionalQueries: feedback.additionalQueries.length,
+            subsequentQueries: feedback.subsequentQueries.length,
+            foundViaFollowUp: feedback.foundViaFollowUp.length,
+            failureToFind: feedback.failureToFind.length,
           } : null,
           attemptNumber: node.attemptCount,
           previousAttemptErrors: node.attempts

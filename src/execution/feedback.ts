@@ -49,13 +49,33 @@ export interface ExecutionFeedback {
 
   // -- Missing information --
 
-  /** Information the agent needed but wasn't provided. */
+  /** Information the agent needed but wasn't provided in the initial context. */
   missingInformation: MissingInfo[];
 
-  // -- Additional queries --
+  // -- Additional queries (subsequent retrievals) --
 
-  /** If the agent performed additional knowledge queries. */
-  additionalQueries: AdditionalQueryFeedback[];
+  /**
+   * Knowledge queries the agent performed during execution beyond the
+   * initial context. Used to assess whether the initial retrieval was
+   * sufficient and what kinds of follow-up are common.
+   */
+  subsequentQueries: SubsequentQueryFeedback[];
+
+  /**
+   * Units that weren't in the initial context but were retrieved via
+   * subsequent queries and actually used. These are the strongest signal
+   * that the initial retrieval missed important content — the units were
+   * relevant enough to use, just not surfaced upfront.
+   */
+  foundViaFollowUp: FoundViaFollowUpFeedback[];
+
+  /**
+   * Information the agent looked for but couldn't find anywhere in the
+   * knowledge base, even after subsequent queries. Distinguishes
+   * "missing knowledge" from "retrieval failure" — the former means
+   * the KB needs to grow; the latter means retrieval needs to improve.
+   */
+  failureToFind: FailureToFindFeedback[];
 
   // -- Action definition feedback --
 
@@ -99,17 +119,53 @@ export interface MissingInfo {
 }
 
 /**
- * Feedback on an additional query the agent performed.
+ * Feedback on a subsequent (follow-up) query the agent performed.
+ * Captures the full lifecycle: what was queried, what came back,
+ * what was useful.
  */
-export interface AdditionalQueryFeedback {
+export interface SubsequentQueryFeedback {
   /** What the agent searched for. */
   query: string;
   /** Why it was needed. */
   reason: string;
-  /** Whether it returned useful results. */
+  /** All unit IDs returned by the query. */
+  unitsReturned: string[];
+  /** Of returned units, which ones were actually used. */
+  unitsUsed: string[];
+  /** Whether the query overall produced something useful. */
   effective: boolean;
-  /** How many useful units were found. */
-  usefulUnitsFound: number;
+  detail?: string;
+}
+
+/**
+ * A unit that wasn't in the initial context but was found via follow-up
+ * and used. Strong signal that the initial retrieval missed it.
+ */
+export interface FoundViaFollowUpFeedback {
+  unitId: string;
+  /** The follow-up query that surfaced this unit (matches subsequentQueries). */
+  viaQuery: string;
+  /** How important the unit turned out to be (0-1). */
+  importance: number;
+  /** Why this unit should likely have been in the initial context. */
+  detail?: string;
+}
+
+/**
+ * Information the agent looked for but couldn't find.
+ */
+export interface FailureToFindFeedback {
+  /** Description of what was sought. */
+  description: string;
+  /** Queries the agent tried (if any) before giving up. */
+  attemptedQueries: string[];
+  /**
+   * The agent's assessment of whether this is missing knowledge or
+   * a retrieval failure.
+   */
+  diagnosis: 'missing-knowledge' | 'likely-retrieval-failure' | 'unclear';
+  /** How critical this was to the task. */
+  severity: 'blocking' | 'degraded-quality' | 'minor-inconvenience';
   detail?: string;
 }
 
@@ -198,13 +254,30 @@ export class InMemoryFeedbackStore implements FeedbackStore {
 export const FEEDBACK_INSTRUCTIONS = `
 After completing your primary task, provide execution feedback in a JSON block marked with ---FEEDBACK---. This is required for every response.
 
+The feedback drives retrieval and process optimization. Be specific and accurate.
+For unit IDs, use the short IDs shown in the context (e.g., "id:abc12345").
+
 ---FEEDBACK---
 {
   "contextQuality": "sufficient|mostly-sufficient|insufficient|excessive",
-  "usedUnits": [{"unitId": "...", "usage": "directly-applied|informed-reasoning|provided-context|used-as-reference", "importance": 0.0-1.0, "detail": "..."}],
-  "unusedUnits": [{"unitId": "...", "reason": "irrelevant|redundant|too-detailed|too-abstract|outdated|wrong-context"}],
-  "missingInformation": [{"description": "...", "severity": "blocking|degraded-quality|minor-inconvenience", "resolution": "found-via-query|inferred|asked-user|worked-around|unresolved"}],
-  "additionalQueries": [{"query": "...", "reason": "...", "effective": true|false, "usefulUnitsFound": 0}],
+  "usedUnits": [
+    {"unitId": "...", "usage": "directly-applied|informed-reasoning|provided-context|used-as-reference", "importance": 0.0-1.0, "detail": "..."}
+  ],
+  "unusedUnits": [
+    {"unitId": "...", "reason": "irrelevant|redundant|too-detailed|too-abstract|outdated|wrong-context"}
+  ],
+  "missingInformation": [
+    {"description": "...", "severity": "blocking|degraded-quality|minor-inconvenience", "resolution": "found-via-query|inferred|asked-user|worked-around|unresolved"}
+  ],
+  "subsequentQueries": [
+    {"query": "...", "reason": "...", "unitsReturned": ["..."], "unitsUsed": ["..."], "effective": true|false}
+  ],
+  "foundViaFollowUp": [
+    {"unitId": "...", "viaQuery": "...", "importance": 0.0-1.0, "detail": "should likely have been in initial context"}
+  ],
+  "failureToFind": [
+    {"description": "...", "attemptedQueries": ["..."], "diagnosis": "missing-knowledge|likely-retrieval-failure|unclear", "severity": "blocking|degraded-quality|minor-inconvenience"}
+  ],
   "actionFeedback": {"instructionQuality": "clear|mostly-clear|ambiguous|incomplete", "inputAccuracy": "accurate|mostly-accurate|inaccurate", "outputAccuracy": "accurate|mostly-accurate|inaccurate", "suggestions": ["..."]}
 }
 `;
@@ -251,7 +324,11 @@ export function parseFeedback(
       usedUnits: parsed.usedUnits ?? [],
       unusedUnits: parsed.unusedUnits ?? [],
       missingInformation: parsed.missingInformation ?? [],
-      additionalQueries: parsed.additionalQueries ?? [],
+      // New rich feedback fields with backward-compat fallback
+      subsequentQueries: parsed.subsequentQueries
+        ?? convertLegacyAdditionalQueries(parsed.additionalQueries),
+      foundViaFollowUp: parsed.foundViaFollowUp ?? [],
+      failureToFind: parsed.failureToFind ?? [],
       actionFeedback: parsed.actionFeedback,
     };
   } catch {
@@ -267,4 +344,20 @@ export function extractPrimaryResponse(response: string): string {
   const idx = response.indexOf(marker);
   if (idx === -1) return response.trim();
   return response.substring(0, idx).trim();
+}
+
+/**
+ * Convert legacy "additionalQueries" feedback to the new SubsequentQueryFeedback shape.
+ * Used for backward compatibility when an agent or stored record uses the older format.
+ */
+function convertLegacyAdditionalQueries(legacy: unknown): SubsequentQueryFeedback[] {
+  if (!Array.isArray(legacy)) return [];
+  return legacy.map((q: any) => ({
+    query: String(q.query ?? ''),
+    reason: String(q.reason ?? ''),
+    unitsReturned: [],
+    unitsUsed: [],
+    effective: Boolean(q.effective),
+    detail: q.detail ?? `Legacy feedback. usefulUnitsFound=${q.usefulUnitsFound ?? 0}`,
+  }));
 }

@@ -1,5 +1,15 @@
 /**
- * Retriever: scoped vector search with weighted scoring.
+ * Retriever: scoped vector search with weighted scoring and optional tag boosting.
+ *
+ * Final score = vectorSimilarity * scopeWeight * (1 + tagBoostFactor * tagOverlap)
+ *
+ * - scopeWeight comes from the hierarchical ScopeResolver (1.0 if flatScope=true)
+ * - tagOverlap is the fraction of query tags matched in unit tags (0 if no queryTags)
+ *
+ * This single retriever supports the three benchmark strategies via configuration:
+ * - Flat vector: { flatScope: true, tagBoostFactor: 0 }
+ * - Hierarchical: { flatScope: false, tagBoostFactor: 0 }  (default)
+ * - Tag-aware: { flatScope: false, tagBoostFactor: > 0, queryTags: [...] }
  */
 
 import type {
@@ -13,6 +23,7 @@ import type { VectorStore } from '../storage/vector-store.js';
 import type { UnitStore } from '../storage/unit-store.js';
 import type { ContextStore } from '../storage/context-store.js';
 import type { ScopeResolver } from './scope-resolver.js';
+import { tagOverlapScore } from './tag-overlap.js';
 
 export interface Retriever {
   retrieve(query: string, options: RetrievalOptions): Promise<RetrievalResult>;
@@ -64,12 +75,15 @@ export class VectorRetriever implements Retriever {
     const scoredUnits: ScoredUnit[] = [];
     let candidatesAfterContentFilter = 0;
     const scopeUnitCounts = new Map<string, number>();
+    const flatScope = options.flatScope === true;
+    const tagBoostFactor = options.tagBoostFactor ?? 0;
+    const queryTags = options.queryTags ?? [];
 
     for (const vr of vectorResults) {
       const unit = await this.deps.unitStore.get(vr.id);
       if (!unit) continue;
 
-      // Apply content type and tag filters
+      // Apply content type and tag filters (hard filters)
       if (options.contentTypes && !options.contentTypes.includes(unit.metadata.contentType)) {
         continue;
       }
@@ -78,15 +92,23 @@ export class VectorRetriever implements Retriever {
       }
       candidatesAfterContentFilter++;
 
-      const scopeWeight = weightMap.get(unit.contextId) ?? 0;
+      // Scope weight: 1.0 if flat, else from the resolver
+      const scopeWeight = flatScope ? 1.0 : (weightMap.get(unit.contextId) ?? 0);
       const vectorSimilarity = vr.score;
-      const score = vectorSimilarity * scopeWeight;
+
+      // Tag boost: only computed if queryTags + tagBoostFactor > 0
+      let tagBoost = 0;
+      if (queryTags.length > 0 && tagBoostFactor > 0) {
+        tagBoost = tagOverlapScore(queryTags, unit.metadata.tags);
+      }
+
+      const score = vectorSimilarity * scopeWeight * (1 + tagBoostFactor * tagBoost);
 
       if (options.minSimilarity != null && score < options.minSimilarity) {
         continue;
       }
 
-      scoredUnits.push({ unit, score, scopeWeight, vectorSimilarity });
+      scoredUnits.push({ unit, score, scopeWeight, vectorSimilarity, tagBoost });
 
       // Track per-scope unit counts
       scopeUnitCounts.set(unit.contextId, (scopeUnitCounts.get(unit.contextId) ?? 0) + 1);

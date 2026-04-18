@@ -254,8 +254,30 @@ export interface RetrievalOptions {
   maxResults: number;
   minSimilarity?: number;
   contentTypes?: ContentType[];
+  /** Filter: only include units with at least one of these tags. */
   tags?: string[];
   includeUsageStats?: boolean;
+
+  /**
+   * Tag-aware retrieval: tags representing the query's relationships/relevance.
+   * Units sharing these tags get a score boost proportional to overlap.
+   * Use namespaced tags by convention (e.g., 'domain:auth', 'applies-to:User').
+   * Distinct from `tags` which is a hard filter — `queryTags` is a soft signal.
+   */
+  queryTags?: string[];
+  /**
+   * How much tag overlap boosts a unit's score.
+   * Final score = vectorSimilarity * scopeWeight * (1 + tagBoostFactor * tagOverlap)
+   * where tagOverlap is 0..1.
+   * Default: 0 (no tag boosting).
+   */
+  tagBoostFactor?: number;
+  /**
+   * If true, scope weights are uniformly 1.0 (no hierarchical weighting).
+   * Used by the benchmark to isolate vector-only retrieval from hierarchical.
+   * Default: false (hierarchical weighting applied).
+   */
+  flatScope?: boolean;
 }
 
 export interface ScoredUnit {
@@ -263,6 +285,8 @@ export interface ScoredUnit {
   score: number;
   scopeWeight: number;
   vectorSimilarity: number;
+  /** Tag overlap boost applied (0..1 if tagBoostFactor > 0, else 0). */
+  tagBoost?: number;
 }
 
 export interface RetrievalResult {

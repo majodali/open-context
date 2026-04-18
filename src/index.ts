@@ -27,6 +27,13 @@ export { acquireContent, createAcquireStep } from './acquisition/acquire.js';
 // Retrieval
 export { type ScopeResolver, DefaultScopeResolver } from './retrieval/scope-resolver.js';
 export { type Retriever, VectorRetriever, createRetrieveStep } from './retrieval/retriever.js';
+export {
+  tagOverlapScore,
+  parseTag,
+  tagsByNamespace,
+  tagValuesInNamespace,
+  makeTag,
+} from './retrieval/tag-overlap.js';
 
 // Assembly
 export { type Assembler, DefaultAssembler, DEFAULT_TEMPLATE, createAssembleStep } from './assembly/assembler.js';
@@ -73,7 +80,9 @@ export {
   type UnitUsageFeedback,
   type UnusedUnitFeedback,
   type MissingInfo,
-  type AdditionalQueryFeedback,
+  type SubsequentQueryFeedback,
+  type FoundViaFollowUpFeedback,
+  type FailureToFindFeedback,
   type ActionDefinitionFeedback,
   type FeedbackRecord,
   type FeedbackStore,
@@ -100,6 +109,10 @@ export {
   StrictUserInputHandler,
   QueuedUserInputHandler,
 } from './execution/tools.js';
+export {
+  createGetUnitDetailTool,
+  createQueryKnowledgeTool,
+} from './execution/standard-tools.js';
 export {
   validateAgainstSchema,
   type SchemaValidationResult,
