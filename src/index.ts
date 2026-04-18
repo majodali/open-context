@@ -63,6 +63,21 @@ export { OPENCONTEXT_SEED, getSeedAcquireOptions, type SeedUnit } from './core/s
 export * from './planning/types.js';
 export { PlanManager } from './planning/plan-manager.js';
 
+// Benchmark
+export * from './benchmark/types.js';
+export {
+  computeQueryMetrics,
+  aggregateMetrics,
+} from './benchmark/metrics.js';
+export {
+  BenchmarkRunner,
+  formatBenchmarkComparison,
+  FLAT_VECTOR_STRATEGY,
+  HIERARCHICAL_STRATEGY,
+  tagAwareStrategy,
+} from './benchmark/runner.js';
+export { SDLC_EVALUATION_SUITE } from './benchmark/sdlc-suite.js';
+
 // Execution: Domain, Action, and DAG models
 export * from './execution/domain-model.js';
 export * from './execution/action-model.js';
