@@ -116,6 +116,30 @@ export {
   type OrchestrationResult,
 } from './execution/orchestrator.js';
 export {
+  ExecutionEventEmitter,
+  filterEvents,
+  type EventHandler,
+  type ExecutionEvent,
+  type BaseEvent,
+  type OrchestrationStartedEvent,
+  type OrchestrationCompletedEvent,
+  type PlanStartedEvent,
+  type PlanCompletedEvent,
+  type NodeStartedEvent,
+  type NodeAttemptStartedEvent,
+  type NodeCompletedEvent,
+  type NodeFailedEvent,
+  type NodeInterruptedEvent,
+  type SubObjectiveSpawnedEvent,
+  type ToolCallEvent,
+  type QueryEvent,
+} from './execution/events.js';
+export {
+  formatOrchestrationTrace,
+  createLiveEventLogger,
+  type TraceFormatOptions,
+} from './execution/trace-formatter.js';
+export {
   RecursionGuard,
   type RecursionGuardConfig,
   type ObjectiveLineage,

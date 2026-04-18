@@ -29,6 +29,7 @@ import {
   type CycleCheckResult,
 } from './recursion-safety.js';
 import type { UnitStore } from '../storage/unit-store.js';
+import type { ExecutionEventEmitter } from './events.js';
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -60,6 +61,8 @@ export interface OrchestratorConfig {
   deferredCheckIntervalMs?: number;
   /** Maximum total nodes across all plans (safety limit). */
   maxTotalNodes?: number;
+  /** Event emitter for live observation of orchestration. */
+  emitter?: ExecutionEventEmitter;
 }
 
 const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -72,6 +75,7 @@ export class Orchestrator {
   private guard: RecursionGuard;
   /** Cross-plan registry of all active plans (for deferred node checking). */
   private activePlans = new Map<string, PlanDAG>();
+  private emitter?: ExecutionEventEmitter;
 
   constructor(
     private engine: DAGEngine,
@@ -81,6 +85,7 @@ export class Orchestrator {
   ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.guard = config?.recursionGuard ?? new RecursionGuard();
+    this.emitter = config?.emitter;
   }
 
   /**
@@ -93,14 +98,29 @@ export class Orchestrator {
   ): Promise<OrchestrationResult> {
     const currentLineage = lineage ?? this.guard.rootLineage();
 
+    this.emitter?.emit({
+      type: 'orchestration.started',
+      objective,
+      depth: currentLineage.depth,
+    });
+
     // Cycle / depth check
     const safety = this.guard.check(objective, currentLineage);
     if (!safety.safe) {
+      const status = safety.reason === 'depth-exceeded' ? 'depth-limit-reached' : 'cycle-detected';
+      this.emitter?.emit({
+        type: 'orchestration.completed',
+        objectiveId: objective.id,
+        status,
+        reason: safety.detail,
+        totalNodesExecuted: 0,
+        subObjectiveCount: 0,
+      });
       return {
         objective,
         metaPlan: this.emptyMetaPlan(objective),
         subObjectives: [],
-        status: safety.reason === 'depth-exceeded' ? 'depth-limit-reached' : 'cycle-detected',
+        status,
         reason: safety.detail,
         totalNodesExecuted: 0,
       };
@@ -111,12 +131,21 @@ export class Orchestrator {
     try {
       metaPlan = await this.buildMetaPlan(objective);
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.emitter?.emit({
+        type: 'orchestration.completed',
+        objectiveId: objective.id,
+        status: 'failed',
+        reason,
+        totalNodesExecuted: 0,
+        subObjectiveCount: 0,
+      });
       return {
         objective,
         metaPlan: this.emptyMetaPlan(objective),
         subObjectives: [],
         status: 'failed',
-        reason: err instanceof Error ? err.message : String(err),
+        reason,
         totalNodesExecuted: 0,
       };
     }
@@ -124,12 +153,21 @@ export class Orchestrator {
     // Validate
     const errors = this.engine.validateAndSeal(metaPlan);
     if (errors.length > 0) {
+      const reason = `Meta-plan validation failed: ${errors.map((e) => e.message).join('; ')}`;
+      this.emitter?.emit({
+        type: 'orchestration.completed',
+        objectiveId: objective.id,
+        status: 'failed',
+        reason,
+        totalNodesExecuted: 0,
+        subObjectiveCount: 0,
+      });
       return {
         objective,
         metaPlan,
         subObjectives: [],
         status: 'failed',
-        reason: `Meta-plan validation failed: ${errors.map((e) => e.message).join('; ')}`,
+        reason,
         totalNodesExecuted: 0,
       };
     }
@@ -144,18 +182,37 @@ export class Orchestrator {
         (n) => n.attempts.length > 0,
       ).length;
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.emitter?.emit({
+        type: 'orchestration.completed',
+        objectiveId: objective.id,
+        status: 'failed',
+        reason,
+        totalNodesExecuted: totalExecuted,
+        subObjectiveCount: 0,
+      });
       return {
         objective,
         metaPlan,
         subObjectives: [],
         status: 'failed',
-        reason: err instanceof Error ? err.message : String(err),
+        reason,
         totalNodesExecuted: totalExecuted,
       };
     }
 
     // Extract sub-objectives that may have been produced
     const subObjectives = this.extractSubObjectives(metaPlan);
+
+    // Emit spawn events for each sub-objective
+    for (const subObj of subObjectives) {
+      this.emitter?.emit({
+        type: 'subobjective.spawned',
+        parentObjectiveId: objective.id,
+        subObjectiveId: subObj.id,
+        subObjectiveDescription: subObj.description,
+      });
+    }
 
     // Recursively orchestrate sub-objectives
     const subResults: OrchestrationResult[] = [];
@@ -167,19 +224,36 @@ export class Orchestrator {
       totalExecuted += subResult.totalNodesExecuted;
 
       if (totalExecuted >= (this.config.maxTotalNodes ?? Infinity)) {
-        return {
+        const overflowResult = {
           objective,
           metaPlan,
           subObjectives: subResults,
-          status: 'failed',
+          status: 'failed' as const,
           reason: `Exceeded maxTotalNodes (${this.config.maxTotalNodes})`,
           totalNodesExecuted: totalExecuted,
         };
+        this.emitter?.emit({
+          type: 'orchestration.completed',
+          objectiveId: objective.id,
+          status: overflowResult.status,
+          reason: overflowResult.reason,
+          totalNodesExecuted: totalExecuted,
+          subObjectiveCount: subResults.length,
+        });
+        return overflowResult;
       }
     }
 
     // Determine final status from meta-plan and sub-results
     const status = this.determineStatus(metaPlan, subResults);
+
+    this.emitter?.emit({
+      type: 'orchestration.completed',
+      objectiveId: objective.id,
+      status,
+      totalNodesExecuted: totalExecuted,
+      subObjectiveCount: subResults.length,
+    });
 
     return {
       objective,

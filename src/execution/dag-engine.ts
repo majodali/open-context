@@ -63,7 +63,11 @@ export interface ActionExecutor {
 // DAG Engine
 // ---------------------------------------------------------------------------
 
+import type { ExecutionEventEmitter } from './events.js';
+
 export class DAGEngine {
+  constructor(private emitter?: ExecutionEventEmitter) {}
+
   // ── Structural Validation ────────────────────────────────────────────
 
   /**
@@ -297,19 +301,59 @@ export class DAGEngine {
         );
         if (indicator) {
           this.interruptNode(dag, node.id, indicator.id);
+          this.emitter?.emit({
+            type: 'node.interrupted',
+            planId: dag.id,
+            nodeId: node.id,
+            riskIndicatorId: indicator.id,
+          });
           executed.push(node);
           continue;
         }
       }
 
       const inputs = this.resolveInputs(dag, node);
+      const attemptStartedAt = Date.now();
+      const previousError = node.attempts.length > 0
+        ? node.attempts[node.attempts.length - 1].error
+        : undefined;
+
       this.startNode(dag, node.id);
+
+      this.emitter?.emit({
+        type: 'node.started',
+        planId: dag.id,
+        nodeId: node.id,
+        actionId: node.action?.id ?? 'unknown',
+        actionName: node.action?.name ?? 'unknown',
+        attemptNumber: node.attemptCount,
+      });
+
+      if (node.attemptCount > 1) {
+        this.emitter?.emit({
+          type: 'node.attempt',
+          planId: dag.id,
+          nodeId: node.id,
+          attemptNumber: node.attemptCount,
+          previousError,
+        });
+      }
 
       try {
         const result = await executor.execute(node, inputs);
 
         if (result.error) {
           this.failNode(dag, node.id, result.error);
+          const willRetry = node.status === 'pending';
+          this.emitter?.emit({
+            type: 'node.failed',
+            planId: dag.id,
+            nodeId: node.id,
+            actionId: node.action?.id ?? 'unknown',
+            error: result.error,
+            attemptsUsed: node.attemptCount,
+            willRetry,
+          });
         } else {
           this.completeNode(
             dag,
@@ -318,9 +362,49 @@ export class DAGEngine {
             result.validationResults,
             result.executionMeta,
           );
+          // completeNode may have set status to 'completed', 'failed', or 'pending'
+          const currentStatus = node.status as NodeStatus;
+          if (currentStatus === 'completed') {
+            const validationsPassed = result.validationResults.filter((v) => v.passed).length;
+            const validationsFailed = result.validationResults.filter((v) => !v.passed).length;
+            this.emitter?.emit({
+              type: 'node.completed',
+              planId: dag.id,
+              nodeId: node.id,
+              actionId: node.action?.id ?? 'unknown',
+              durationMs: Date.now() - attemptStartedAt,
+              outputKeys: Object.keys(result.outputs),
+              validationsPassed,
+              validationsFailed,
+            });
+          } else if (currentStatus === 'failed' || currentStatus === 'pending') {
+            // completeNode may have failed the node due to validation failure
+            const errMsg = node.attempts[node.attempts.length - 1]?.error ?? 'validation failed';
+            const willRetry = currentStatus === 'pending';
+            this.emitter?.emit({
+              type: 'node.failed',
+              planId: dag.id,
+              nodeId: node.id,
+              actionId: node.action?.id ?? 'unknown',
+              error: errMsg,
+              attemptsUsed: node.attemptCount,
+              willRetry,
+            });
+          }
         }
       } catch (err) {
-        this.failNode(dag, node.id, err instanceof Error ? err.message : String(err));
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.failNode(dag, node.id, errMsg);
+        const willRetry = node.status === 'pending';
+        this.emitter?.emit({
+          type: 'node.failed',
+          planId: dag.id,
+          nodeId: node.id,
+          actionId: node.action?.id ?? 'unknown',
+          error: errMsg,
+          attemptsUsed: node.attemptCount,
+          willRetry,
+        });
       }
 
       executed.push(node);
@@ -345,6 +429,14 @@ export class DAGEngine {
       );
     }
 
+    const startedAt = Date.now();
+    this.emitter?.emit({
+      type: 'plan.started',
+      planId: dag.id,
+      objectiveId: dag.objectiveId,
+      nodeCount: dag.nodes.size,
+    });
+
     dag.status = 'executing';
 
     let rounds = 0;
@@ -360,6 +452,13 @@ export class DAGEngine {
     }
 
     this.updatePlanStatus(dag);
+
+    this.emitter?.emit({
+      type: 'plan.completed',
+      planId: dag.id,
+      status: dag.status,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   // ── Private: Validation Checks ───────────────────────────────────────
