@@ -93,6 +93,16 @@ export { OPENCONTEXT_SEED, getSeedAcquireOptions, type SeedUnit } from './core/s
 export * from './planning/types.js';
 export { PlanManager } from './planning/plan-manager.js';
 
+// Walkthrough
+export * from './walkthrough/types.js';
+export { WalkthroughRunner, type WalkthroughRunnerDeps } from './walkthrough/runner.js';
+export {
+  formatWalkthroughSummary,
+  formatWalkthroughMarkdown,
+  walkthroughToJson,
+  type MarkdownReportOptions,
+} from './walkthrough/report.js';
+
 // Benchmark
 export * from './benchmark/types.js';
 export {
