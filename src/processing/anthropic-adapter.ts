@@ -2,10 +2,19 @@
  * Anthropic agent adapter: sends assembled context to Claude and returns the response.
  *
  * Supports:
+ * - Native Anthropic tool-use (tools passed as structured definitions)
+ * - Multi-turn tool call loop via processMultiTurn()
  * - Structured output via acquire hints (agent can suggest knowledge to acquire)
- * - Tool use (agent can request tool calls)
  * - Context sufficiency signaling (for metrics)
  * - Configurable model, system prompt, and parameters
+ *
+ * Tool flow:
+ * 1. executor calls process(input, tools) — tools are sent in the API call
+ * 2. Claude may emit tool_use blocks in its response
+ * 3. executor resolves tool calls, then calls processMultiTurn(input, history, tools)
+ * 4. we reconstruct the conversation (user msg, assistant msgs with tool_use,
+ *    user msgs with tool_result) and continue the API call
+ * 5. repeat until Claude returns without tool calls (final response)
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -13,10 +22,10 @@ import type {
   AssembledInput,
   AgentOutput,
   AcquireHint,
-  ToolCall,
   ContentType,
 } from '../core/types.js';
-import type { AgentAdapter } from './agent-adapter.js';
+import type { AgentAdapter, AgentTurn } from './agent-adapter.js';
+import type { ToolDefinition } from '../execution/tools.js';
 
 export interface AnthropicAdapterConfig {
   /** Anthropic API key. If not provided, reads from ANTHROPIC_API_KEY env var. */
@@ -31,8 +40,10 @@ export interface AnthropicAdapterConfig {
   temperature: number;
   /**
    * If true, append instructions asking the agent to provide structured
-   * feedback about context sufficiency and knowledge acquisition hints.
-   * Default: true
+   * metadata (context sufficiency, acquire hints). Default: true
+   * Note: this is legacy metadata. The standard feedback protocol
+   * (FEEDBACK_INSTRUCTIONS in the assembled input) is the primary way
+   * to capture feedback.
    */
   requestStructuredOutput: boolean;
 }
@@ -68,44 +79,153 @@ export class AnthropicAgentAdapter implements AgentAdapter {
     });
   }
 
-  async process(input: AssembledInput): Promise<AgentOutput> {
-    // Build the user message from assembled sections
-    let userMessage = input.sections.map((s) => s.content).join('\n\n');
+  // ── First turn ────────────────────────────────────────────────────────────
 
-    if (this.config.requestStructuredOutput) {
-      userMessage += STRUCTURED_OUTPUT_SUFFIX;
-    }
+  async process(input: AssembledInput, tools?: ToolDefinition[]): Promise<AgentOutput> {
+    const userMessage = this.buildInitialUserMessage(input);
+    const messages: Anthropic.MessageParam[] = [
+      { role: 'user', content: userMessage },
+    ];
+    return this.invoke(messages, tools);
+  }
 
+  // ── Subsequent turns after tool calls ────────────────────────────────────
+
+  async processMultiTurn(
+    input: AssembledInput,
+    history: AgentTurn[],
+    availableTools: ToolDefinition[],
+  ): Promise<AgentOutput> {
+    const messages = this.buildHistoryMessages(input, history);
+    return this.invoke(messages, availableTools);
+  }
+
+  // ── Core invocation ──────────────────────────────────────────────────────
+
+  private async invoke(
+    messages: Anthropic.MessageParam[],
+    tools?: ToolDefinition[],
+  ): Promise<AgentOutput> {
     const startTime = Date.now();
 
     const params: Anthropic.MessageCreateParams = {
       model: this.config.model,
       max_tokens: this.config.maxTokens,
       temperature: this.config.temperature,
-      messages: [
-        { role: 'user', content: userMessage },
-      ],
+      messages,
     };
 
     if (this.config.systemPrompt) {
       params.system = this.config.systemPrompt;
     }
 
-    const response = await this.client.messages.create(params);
+    if (tools && tools.length > 0) {
+      params.tools = tools.map(toolDefinitionToAnthropicTool);
+    }
 
+    const response = await this.client.messages.create(params);
     const latencyMs = Date.now() - startTime;
 
+    return this.buildAgentOutput(response, latencyMs);
+  }
+
+  // ── Message construction ─────────────────────────────────────────────────
+
+  private buildInitialUserMessage(input: AssembledInput): string {
+    let userMessage = input.sections.map((s) => s.content).join('\n\n');
+    if (this.config.requestStructuredOutput) {
+      userMessage += STRUCTURED_OUTPUT_SUFFIX;
+    }
+    return userMessage;
+  }
+
+  /**
+   * Reconstruct the conversation message history from the initial input
+   * plus prior turns. The resulting array is what we send to the API on
+   * continuation turns.
+   *
+   * Each turn in history represents: the agent's response (with its tool_use
+   * blocks) followed by a user message carrying the tool results.
+   */
+  private buildHistoryMessages(
+    input: AssembledInput,
+    history: AgentTurn[],
+  ): Anthropic.MessageParam[] {
+    const messages: Anthropic.MessageParam[] = [
+      { role: 'user', content: this.buildInitialUserMessage(input) },
+    ];
+
+    for (const turn of history) {
+      const assistantContent: Anthropic.ContentBlockParam[] = [];
+
+      // Original text response
+      if (turn.output.response) {
+        assistantContent.push({ type: 'text', text: turn.output.response });
+      }
+
+      // Tool use blocks
+      if (turn.output.toolCalls && turn.output.toolCalls.length > 0) {
+        for (const call of turn.output.toolCalls) {
+          assistantContent.push({
+            type: 'tool_use',
+            id: call.id,
+            name: call.name,
+            input: call.arguments,
+          });
+        }
+      }
+
+      if (assistantContent.length > 0) {
+        messages.push({ role: 'assistant', content: assistantContent });
+      }
+
+      // User message with tool results
+      if (turn.toolResponses.length > 0) {
+        const userContent: Anthropic.ContentBlockParam[] = turn.toolResponses.map(
+          (tr) => ({
+            type: 'tool_result',
+            tool_use_id: tr.id,
+            content: typeof tr.content === 'string'
+              ? tr.content
+              : JSON.stringify(tr.content),
+            is_error: !tr.success,
+          }),
+        );
+        messages.push({ role: 'user', content: userContent });
+      }
+    }
+
+    return messages;
+  }
+
+  // ── Output construction ──────────────────────────────────────────────────
+
+  private buildAgentOutput(
+    response: Anthropic.Message,
+    latencyMs: number,
+  ): AgentOutput {
     // Extract text content
     const textBlocks = response.content.filter(
       (block): block is Anthropic.TextBlock => block.type === 'text',
     );
     const fullResponse = textBlocks.map((b) => b.text).join('');
 
-    // Parse structured output if present
+    // Parse legacy structured metadata (if any)
     const { mainResponse, metadata } = this.parseStructuredOutput(fullResponse);
 
-    // Build agent output
-    const output: AgentOutput = {
+    // Collect tool_use blocks → ToolCall[]
+    const toolBlocks = response.content.filter(
+      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+    );
+    const toolCalls = toolBlocks.length > 0
+      ? toolBlocks.map((block) => ({
+          id: block.id,
+          name: block.name,
+          arguments: block.input as Record<string, unknown>,
+        }))
+      : undefined;
+
+    return {
       response: mainResponse,
       metadata: {
         model: response.model,
@@ -116,26 +236,10 @@ export class AnthropicAgentAdapter implements AgentAdapter {
         contextSufficiency: metadata.contextSufficiency,
       },
       acquireHints: metadata.acquireHints,
+      toolCalls,
     };
-
-    // Handle tool use blocks
-    const toolBlocks = response.content.filter(
-      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
-    );
-    if (toolBlocks.length > 0) {
-      output.toolCalls = toolBlocks.map((block) => ({
-        id: block.id,
-        name: block.name,
-        arguments: block.input as Record<string, unknown>,
-      }));
-    }
-
-    return output;
   }
 
-  /**
-   * Parse the structured metadata section from the response.
-   */
   private parseStructuredOutput(fullResponse: string): {
     mainResponse: string;
     metadata: {
@@ -155,7 +259,6 @@ export class AnthropicAgentAdapter implements AgentAdapter {
     let contextSufficiency: 'sufficient' | 'insufficient' | 'redundant' | undefined;
     let acquireHints: AcquireHint[] | undefined;
 
-    // Parse CONTEXT_SUFFICIENCY
     const sufficiencyMatch = metadataSection.match(
       /CONTEXT_SUFFICIENCY:\s*(sufficient|insufficient|redundant)/i,
     );
@@ -163,7 +266,6 @@ export class AnthropicAgentAdapter implements AgentAdapter {
       contextSufficiency = sufficiencyMatch[1].toLowerCase() as any;
     }
 
-    // Parse ACQUIRE_HINTS
     const hintsMatch = metadataSection.match(/ACQUIRE_HINTS:\s*(\[[\s\S]*?\])/);
     if (hintsMatch) {
       try {
@@ -187,4 +289,19 @@ export class AnthropicAgentAdapter implements AgentAdapter {
       metadata: { contextSufficiency, acquireHints },
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tool definition conversion
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert an OpenContext ToolDefinition into the Anthropic Tool format.
+ */
+function toolDefinitionToAnthropicTool(tool: ToolDefinition): Anthropic.Tool {
+  return {
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
+  };
 }

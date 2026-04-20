@@ -249,9 +249,16 @@ export class AgentActionExecutor implements ActionExecutor {
     node: PlanNode,
   ): Promise<{ finalOutput: AgentOutput; turns: AgentTurn[] }> {
     const turns: AgentTurn[] = [];
-    let currentOutput = await this.agentAdapter.process(input);
 
-    // If adapter doesn't support multi-turn or no tool calls, return immediately
+    // Pass tools to the adapter on the initial call so the agent knows
+    // what's available and can emit tool_use requests from the first turn.
+    const availableTools = this.config.toolRegistry
+      ? this.config.toolRegistry.list()
+      : [];
+
+    let currentOutput = await this.agentAdapter.process(input, availableTools);
+
+    // If adapter doesn't support multi-turn or no tool registry, we're done.
     if (!this.agentAdapter.processMultiTurn || !this.config.toolRegistry) {
       return { finalOutput: currentOutput, turns };
     }
@@ -286,9 +293,6 @@ export class AgentActionExecutor implements ActionExecutor {
 
       // Record this turn
       turns.push({ output: currentOutput, toolResponses });
-
-      // Get the available tools list for the next invocation
-      const availableTools = this.config.toolRegistry.list();
 
       // Re-invoke the agent with the tool results
       currentOutput = await this.agentAdapter.processMultiTurn(
