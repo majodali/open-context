@@ -103,6 +103,12 @@ export async function acquireContent(
     chunks.map((c) => deps.classifier.classify(c.content)),
   );
 
+  // 2b. Auto-context tags: encode hierarchy as tags so retrieval can
+  //     use them directly without special hierarchical logic.
+  //     - context:{id} — the direct context
+  //     - ancestor:{id} — each ancestor in the hierarchy
+  const autoContextTags = await computeContextTags(contextId, deps.contextStore);
+
   // 3. Create semantic units with governance fields
   const units: SemanticUnit[] = chunks.map((chunk, i) => ({
     id: uuidv4(),
@@ -113,10 +119,11 @@ export async function acquireContent(
       contentType: options?.contentType ?? classifications[i].contentType,
       createdAt: now,
       updatedAt: now,
-      tags: [
+      tags: dedupeTags([
+        ...autoContextTags,
         ...(options?.tags ?? []),
         ...classifications[i].tags,
-      ],
+      ]),
       chunkParentId: chunks.length > 1 ? `chunk-group-${now}` : undefined,
       createdBy: options?.createdBy,
       mutability: options?.mutability ?? 'assertion',
@@ -172,4 +179,60 @@ export function createAcquireStep(deps: AcquisitionDeps) {
     };
     return ctx;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Auto-context tagging
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute automatic context tags for a unit being acquired into contextId.
+ * These tags encode the hierarchy position so retrieval can use them as
+ * features without special hierarchical logic.
+ *
+ * Returns tags like:
+ * - context:{contextId} — the direct context
+ * - ancestor:{ancestorId} — each ancestor in the hierarchy (root first)
+ *
+ * If no context store is available, returns just the direct context tag.
+ */
+export async function computeContextTags(
+  contextId: string,
+  contextStore?: { getContext(id: string): Promise<BoundedContext | null> },
+): Promise<string[]> {
+  const tags: string[] = [`context:${contextId}`];
+  if (!contextStore) return tags;
+
+  // Walk the ancestor chain
+  const visited = new Set<string>([contextId]);
+  let currentId: string | undefined = contextId;
+  let depth = 0;
+  const maxDepth = 32; // Safety limit
+
+  while (depth < maxDepth) {
+    const ctx: BoundedContext | null = await contextStore.getContext(currentId!);
+    if (!ctx || !ctx.parentId) break;
+    if (visited.has(ctx.parentId)) break; // Cycle guard
+    visited.add(ctx.parentId);
+    tags.push(`ancestor:${ctx.parentId}`);
+    currentId = ctx.parentId;
+    depth++;
+  }
+
+  return tags;
+}
+
+/**
+ * Dedupe tags, preserving first-occurrence order.
+ */
+function dedupeTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of tags) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
 }

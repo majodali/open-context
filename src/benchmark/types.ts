@@ -132,6 +132,13 @@ export interface EvaluationSuite {
 /**
  * A named retrieval strategy with its configuration.
  * Strategies are applied to the same corpus + queries for direct comparison.
+ *
+ * Two modes:
+ * - Default: strategy configures RetrievalOptions and the benchmark runs the
+ *   standard OpenContext retriever with those options.
+ * - Custom: strategy provides its own retrieve function, which is useful when
+ *   testing an alternative retriever (e.g., FeatureRetriever) against the
+ *   same corpus and queries.
  */
 export interface RetrievalStrategy {
   /** Strategy name (e.g., 'flat-vector', 'hierarchical', 'tag-aware', 'combined'). */
@@ -144,6 +151,18 @@ export interface RetrievalStrategy {
    * query definition) when configuring retrieval.
    */
   buildOptions(query: BenchmarkQuery, baseOptions: RetrievalOptions): RetrievalOptions;
+  /**
+   * Optional custom retrieve function. If provided, the benchmark calls this
+   * instead of the default OpenContext retriever. Use when the strategy
+   * implements its own retriever (e.g., FeatureRetriever).
+   *
+   * The BenchmarkContext passed gives access to the loaded OpenContext instance.
+   */
+  retrieve?(
+    query: BenchmarkQuery,
+    options: RetrievalOptions,
+    context: { openContext: import('../index.js').OpenContext },
+  ): Promise<{ units: import('../core/types.js').ScoredUnit[] }>;
 }
 
 // ---------------------------------------------------------------------------

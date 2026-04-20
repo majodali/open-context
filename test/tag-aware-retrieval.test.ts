@@ -161,11 +161,27 @@ describe('Tag-aware retrieval (VectorRetriever)', () => {
 
   it('flatScope ignores hierarchical weighting', async () => {
     const oc = new OpenContext({ embedder: new DeterministicEmbedder(64) });
-    const root = await oc.createContext({ name: 'Root', description: 'Root' });
+    // Use legacy hierarchical scope rules to exercise hierarchical weighting
+    // (default is flat in current OpenContext)
+    const hierRules = {
+      selfWeight: 1.0,
+      parentWeight: 0.8,
+      siblingWeight: 0.5,
+      childWeight: 0.9,
+      depthDecay: 0.7,
+      minWeight: 0.1,
+      inheritRules: true,
+    };
+    const root = await oc.createContext({
+      name: 'Root',
+      description: 'Root',
+      scopeRules: hierRules,
+    });
     const child = await oc.createContext({
       name: 'Child',
       description: 'Child',
       parentId: root.id,
+      scopeRules: hierRules,
     });
 
     await oc.acquire('Test fact in root', root.id);
@@ -179,7 +195,7 @@ describe('Tag-aware retrieval (VectorRetriever)', () => {
       scopeResolver: oc.scopeResolver,
     });
 
-    // From child context, with hierarchical weighting (default)
+    // From child context, with hierarchical weighting
     const hierarchical = await retriever.retrieve('test', {
       contextId: child.id,
       maxResults: 10,

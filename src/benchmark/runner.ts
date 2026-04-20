@@ -70,6 +70,41 @@ export function tagAwareStrategy(boostFactor: number = 1.0): RetrievalStrategy {
   };
 }
 
+/**
+ * Feature-based retrieval strategy using FeatureRetriever with configurable
+ * weight vector. Instantiates a fresh retriever per benchmark call but shares
+ * the loaded OpenContext instance's stores.
+ */
+export function featureBasedStrategy(options?: {
+  name?: string;
+  weights?: import('../retrieval/feature-scorer.js').WeightVector;
+}): RetrievalStrategy {
+  const name = options?.name ?? 'feature-based';
+  return {
+    name,
+    description: `Feature-based scoring (${name})`,
+    buildOptions(query, base) {
+      return { ...base, queryTags: query.queryTags ?? [] };
+    },
+    async retrieve(query, opts, context) {
+      // Build feature retriever on demand using the loaded instance's stores.
+      const { FeatureRetriever } = await import('../retrieval/feature-retriever.js');
+      const retriever = new FeatureRetriever(
+        {
+          embedder: context.openContext.embedder,
+          vectorStore: context.openContext.vectorStore,
+          unitStore: context.openContext.unitStore,
+          contextStore: context.openContext.contextStore,
+          scopeResolver: context.openContext.scopeResolver,
+        },
+        { weights: options?.weights },
+      );
+      const result = await retriever.retrieve(query.text, opts);
+      return { units: result.units };
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark Runner
 // ---------------------------------------------------------------------------
@@ -262,7 +297,16 @@ export class BenchmarkRunner {
     const options = strategy.buildOptions(query, baseOptions);
 
     const startTime = Date.now();
-    const result = await this.oc.retrieve(query.text, fromContextRuntimeId, options);
+    let resultUnits: import('../core/types.js').ScoredUnit[];
+    if (strategy.retrieve) {
+      // Custom retriever (e.g., FeatureRetriever)
+      const custom = await strategy.retrieve(query, options, { openContext: this.oc });
+      resultUnits = custom.units;
+    } else {
+      // Default OpenContext retriever
+      const result = await this.oc.retrieve(query.text, fromContextRuntimeId, options);
+      resultUnits = result.units;
+    }
     const durationMs = Date.now() - startTime;
 
     // Convert runtime UUIDs back to corpus IDs
@@ -272,8 +316,8 @@ export class BenchmarkRunner {
     }
 
     const retrieved: RetrievedUnit[] = [];
-    for (let i = 0; i < result.units.length; i++) {
-      const su = result.units[i];
+    for (let i = 0; i < resultUnits.length; i++) {
+      const su = resultUnits[i];
       const corpusId = this.unitIdReverseMap.get(su.unit.id);
       if (!corpusId) continue; // Skip units we can't map (shouldn't happen)
       retrieved.push({

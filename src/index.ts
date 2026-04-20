@@ -22,7 +22,7 @@ export { type UnitStore, InMemoryUnitStore } from './storage/unit-store.js';
 // Acquisition
 export { type Chunker, DefaultChunker } from './acquisition/chunker.js';
 export { type Classifier, RuleBasedClassifier } from './acquisition/classifier.js';
-export { acquireContent, createAcquireStep } from './acquisition/acquire.js';
+export { acquireContent, createAcquireStep, computeContextTags } from './acquisition/acquire.js';
 
 // Retrieval
 export { type ScopeResolver, DefaultScopeResolver } from './retrieval/scope-resolver.js';
@@ -34,6 +34,30 @@ export {
   tagValuesInNamespace,
   makeTag,
 } from './retrieval/tag-overlap.js';
+export {
+  extractFeatures,
+  scoreFromFeatures,
+  FEATURE_NAMES,
+  DEFAULT_WEIGHTS,
+  WEIGHTS_VECTOR_ONLY,
+  WEIGHTS_TAG_HEAVY,
+  type RetrievalFeatures,
+  type WeightVector,
+  type FeatureExtractionInput,
+} from './retrieval/feature-scorer.js';
+export {
+  FeatureRetriever,
+  type FeatureRetrieverDeps,
+  type FeatureRetrieverConfig,
+} from './retrieval/feature-retriever.js';
+export {
+  InMemoryTrainingDataStore,
+  relevanceLevelToLabel,
+  type TrainingDataStore,
+  type TrainingExample,
+  type TrainingSource,
+  type RelevanceLabel,
+} from './retrieval/training-data.js';
 
 // Assembly
 export { type Assembler, DefaultAssembler, DEFAULT_TEMPLATE, createAssembleStep } from './assembly/assembler.js';
@@ -75,6 +99,7 @@ export {
   FLAT_VECTOR_STRATEGY,
   HIERARCHICAL_STRATEGY,
   tagAwareStrategy,
+  featureBasedStrategy,
 } from './benchmark/runner.js';
 export { SDLC_EVALUATION_SUITE } from './benchmark/sdlc-suite.js';
 
@@ -277,13 +302,18 @@ export interface OpenContextConfig {
 // Main Class
 // ---------------------------------------------------------------------------
 
+/**
+ * Default scope rules: FLAT (all weights = 1.0).
+ * Hierarchy is encoded as tags (context:X, ancestor:Y) added during acquisition.
+ * See src/core/types.ts for background.
+ */
 const DEFAULT_SCOPE: ScopeRules = {
   selfWeight: 1.0,
-  parentWeight: 0.8,
-  siblingWeight: 0.5,
-  childWeight: 0.9,
-  depthDecay: 0.7,
-  minWeight: 0.1,
+  parentWeight: 1.0,
+  siblingWeight: 1.0,
+  childWeight: 1.0,
+  depthDecay: 1.0,
+  minWeight: 1.0,
   inheritRules: true,
 };
 

@@ -143,7 +143,35 @@ export interface ScopeRules {
   inheritRules: boolean;
 }
 
+/**
+ * Default scope rules: FLAT (all weights = 1.0).
+ *
+ * Empirical benchmarking (April 2026) showed that hierarchical scope weighting
+ * regressed retrieval quality vs flat retrieval on realistic SDLC queries.
+ * The default is now flat: treat all scoped contexts equally in retrieval.
+ *
+ * Hierarchy is encoded as `context:X` and `ancestor:Y` tags (added automatically
+ * during acquisition), which the feature-based scorer can weight as one of many
+ * retrieval features rather than as a structural override.
+ *
+ * To re-enable hierarchical weighting for a specific context, override the
+ * scope rules on that context.
+ */
 export const DEFAULT_SCOPE_RULES: ScopeRules = {
+  selfWeight: 1.0,
+  parentWeight: 1.0,
+  siblingWeight: 1.0,
+  childWeight: 1.0,
+  depthDecay: 1.0,
+  minWeight: 1.0,
+  inheritRules: true,
+};
+
+/**
+ * Legacy scope rules from pre-flat defaults, preserved for comparison and
+ * for projects that deliberately want hierarchical weighting.
+ */
+export const LEGACY_HIERARCHICAL_SCOPE_RULES: ScopeRules = {
   selfWeight: 1.0,
   parentWeight: 0.8,
   siblingWeight: 0.5,

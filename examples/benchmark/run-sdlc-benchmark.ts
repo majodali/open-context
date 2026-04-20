@@ -17,7 +17,11 @@ import {
   FLAT_VECTOR_STRATEGY,
   HIERARCHICAL_STRATEGY,
   tagAwareStrategy,
+  featureBasedStrategy,
   SDLC_EVALUATION_SUITE,
+  DEFAULT_WEIGHTS,
+  WEIGHTS_VECTOR_ONLY,
+  WEIGHTS_TAG_HEAVY,
 } from '../../src/index.js';
 import { TransformersEmbedder } from '../../src/storage/transformers-embedder.js';
 
@@ -63,6 +67,9 @@ async function main() {
     tagAwareStrategy(0.5),
     tagAwareStrategy(1.0),
     tagAwareStrategy(2.0),
+    featureBasedStrategy({ name: 'feature-default', weights: DEFAULT_WEIGHTS }),
+    featureBasedStrategy({ name: 'feature-vector-only', weights: WEIGHTS_VECTOR_ONLY }),
+    featureBasedStrategy({ name: 'feature-tag-heavy', weights: WEIGHTS_TAG_HEAVY }),
   ];
 
   console.log(`  Running ${strategies.length} strategies × ${suite.queries.length} queries...\n`);
