@@ -42,6 +42,8 @@ import {
   type ToolExecutionContext,
 } from './tools.js';
 import { validateAgainstSchema } from './json-schema.js';
+import { recordFeedbackAsTraining } from './feedback-bridge.js';
+import type { TrainingDataStore } from '../retrieval/training-data.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -60,6 +62,19 @@ export interface AgentExecutorConfig {
   maxToolCallRounds: number;
   /** Tool registry for handling tool calls. If not provided, tool calls are ignored. */
   toolRegistry?: ToolRegistry;
+  /**
+   * Optional feedback-to-training bridge. When provided, every parsed feedback
+   * is automatically converted into TrainingExamples so the system
+   * accumulates training data from every agent invocation.
+   *
+   * Provide the training data store plus the unit store and embedder the
+   * bridge needs to look up units and compute query/unit feature vectors.
+   */
+  trainingBridge?: {
+    trainingDataStore: TrainingDataStore;
+    unitStore: import('../storage/unit-store.js').UnitStore;
+    embedder: import('../storage/embedder.js').Embedder;
+  };
 }
 
 const DEFAULT_CONFIG: AgentExecutorConfig = {
@@ -186,6 +201,7 @@ export class AgentActionExecutor implements ActionExecutor {
 
       // 9. Record feedback (now we know the outcome)
       const allValidationsPassed = validationResults.every((vr) => vr.passed);
+      let trainingBridgeResult: { recorded: number; skipped: number } | null = null;
       if (feedback) {
         const feedbackRecord: FeedbackRecord = {
           id: uuidv4(),
@@ -196,6 +212,37 @@ export class AgentActionExecutor implements ActionExecutor {
           actionOutcome: allValidationsPassed ? 'succeeded' : 'failed',
         };
         await this.feedbackStore.record(feedbackRecord);
+
+        // If a training bridge is configured, convert feedback into training
+        // examples. One run = as many training examples as there are
+        // used/unused/follow-up units in the feedback.
+        if (this.config.trainingBridge) {
+          try {
+            // Representative query for training: use the primary retrieval query.
+            // This is the query that produced the "primary-context" results
+            // and is the closest stand-in for what a single-query reranker
+            // would see at inference time.
+            const primary = queryResult.source.retrievals.find(
+              (r) => r.purpose === 'primary-context',
+            );
+            const trainingQuery = primary?.query ?? action.description;
+            const trainingQueryTags = primary?.options.queryTags ?? [];
+
+            trainingBridgeResult = await recordFeedbackAsTraining(
+              feedback,
+              {
+                query: trainingQuery,
+                queryTags: trainingQueryTags,
+                contextId: action.contextId,
+                runId: node.id,
+              },
+              this.config.trainingBridge,
+            );
+          } catch (err) {
+            // Bridge failure shouldn't fail the action — just note it
+            trainingBridgeResult = { recorded: 0, skipped: -1 };
+          }
+        }
       }
 
       return {
@@ -221,6 +268,7 @@ export class AgentActionExecutor implements ActionExecutor {
             foundViaFollowUp: feedback.foundViaFollowUp.length,
             failureToFind: feedback.failureToFind.length,
           } : null,
+          trainingBridge: trainingBridgeResult,
           attemptNumber: node.attemptCount,
           previousAttemptErrors: node.attempts
             .filter((a) => a.status === 'failed')

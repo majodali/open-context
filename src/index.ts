@@ -58,6 +58,12 @@ export {
   type TrainingSource,
   type RelevanceLabel,
 } from './retrieval/training-data.js';
+export {
+  recordFeedbackAsTraining,
+  type FeedbackBridgeDeps,
+  type FeedbackBridgeContext,
+  type BridgeResult,
+} from './execution/feedback-bridge.js';
 
 // Assembly
 export { type Assembler, DefaultAssembler, DEFAULT_TEMPLATE, createAssembleStep } from './assembly/assembler.js';
