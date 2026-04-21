@@ -119,6 +119,12 @@ export {
 } from './benchmark/runner.js';
 export { SDLC_EVALUATION_SUITE } from './benchmark/sdlc-suite.js';
 
+// Corpora (for walkthroughs)
+export {
+  EXPANDED_WORKSPACE_CORPUS,
+  getCorpusCounts as getExpandedWorkspaceCounts,
+} from './corpora/expanded-workspace.js';
+
 // Execution: Domain, Action, and DAG models
 export * from './execution/domain-model.js';
 export * from './execution/action-model.js';
