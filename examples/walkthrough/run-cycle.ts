@@ -1,14 +1,17 @@
 /**
  * Run a single cycle of a walkthrough sequence, with pause-for-review.
  *
+ * Reads the Anthropic API key from `.anthropic.key` (gitignored) at the
+ * project root. Falls back to ANTHROPIC_API_KEY env var if the file is absent.
+ *
  * Usage:
  *   # Start a new sequence (runs cycle 0):
- *   ANTHROPIC_API_KEY=xxx npx tsx examples/walkthrough/run-cycle.ts spice-rack
+ *   npx tsx examples/walkthrough/run-cycle.ts spice-rack
  *
  *   # Continue the same sequence (runs next cycle, loads saved state):
- *   ANTHROPIC_API_KEY=xxx npx tsx examples/walkthrough/run-cycle.ts spice-rack --continue
+ *   npx tsx examples/walkthrough/run-cycle.ts spice-rack --continue
  *
- * Outputs (written to examples/walkthrough/runs/<sequenceId>/<timestamp>/):
+ * Outputs (written to examples/walkthrough/runs/<sequenceId>/):
  *   - cycle-N-report.md          Review-ready markdown
  *   - cycle-N-result.json        Full archive of the run
  *   - state-after-cycle-N.json   Saved OpenContext state
@@ -32,7 +35,8 @@ import {
   walkthroughToJson,
 } from '../../src/walkthrough/report.js';
 import { SPICE_RACK_SEQUENCE } from './scenarios/spice-rack.js';
-import type { WalkthroughSequence } from '../../src/walkthrough/sequence.js';
+import type { WalkthroughSequence, CycleSpec } from '../../src/walkthrough/sequence.js';
+import { loadAnthropicKey } from './load-api-key.js';
 
 // ---------------------------------------------------------------------------
 // Known sequences (extend as you add more)
@@ -41,6 +45,28 @@ import type { WalkthroughSequence } from '../../src/walkthrough/sequence.js';
 const SEQUENCES: Record<string, WalkthroughSequence> = {
   'spice-rack': SPICE_RACK_SEQUENCE,
 };
+
+/**
+ * Inject an API key into any cycle that uses the Anthropic agent.
+ * Scenarios leave apiKey unset so we can plug it in here without the key
+ * ever appearing in committed scenario files.
+ */
+function injectAnthropicKey(
+  sequence: WalkthroughSequence,
+  apiKey: string,
+): WalkthroughSequence {
+  const withKey: CycleSpec[] = sequence.cycles.map((c) => {
+    if (c.execution.agent.type !== 'anthropic') return c;
+    return {
+      ...c,
+      execution: {
+        ...c.execution,
+        agent: { ...c.execution.agent, apiKey },
+      },
+    };
+  });
+  return { ...sequence, cycles: withKey };
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -57,7 +83,11 @@ async function main() {
     process.exit(1);
   }
 
-  const sequence = SEQUENCES[sequenceId];
+  // Load API key once and inject into the sequence's agent configs.
+  // (Throws with a clear message if .anthropic.key / ANTHROPIC_API_KEY are absent.)
+  const apiKey = loadAnthropicKey();
+  const sequence = injectAnthropicKey(SEQUENCES[sequenceId], apiKey);
+
   const runDir = join(
     process.cwd(),
     'examples/walkthrough/runs',

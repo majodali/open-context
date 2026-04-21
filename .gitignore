@@ -5,6 +5,7 @@ dist/
 
 # Walkthrough generated files
 examples/walkthrough/*-state.json
+examples/walkthrough/runs/
 
 # Claude Code
 .claude/
@@ -12,3 +13,8 @@ examples/walkthrough/*-state.json
 # Environment
 .env
 .env.*
+
+# Local API key files (never commit)
+.anthropic.key
+*.key
+!*.d.ts.key
