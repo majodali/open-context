@@ -58,7 +58,7 @@ const cycle1_inception: CycleSpec = {
   execution: {
     agent: {
       type: 'anthropic',
-      model: 'claude-haiku-4-5-20250929', // cheaper + realistic-capability stress test
+      model: 'claude-haiku-4-5', // cheaper + realistic-capability stress test
       maxTokens: 4096,
       temperature: 0.5,
     },

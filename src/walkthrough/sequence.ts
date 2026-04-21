@@ -248,6 +248,11 @@ export class SequenceRunner {
 
     // Store the mapping on the instance so later cycles can resolve corpus-id → runtime-id
     (this.oc as any).__corpusContextIdMap = contextIdMap;
+    // Store corpus size so per-cycle stats can report it accurately
+    (this.oc as any).__corpusSize = {
+      units: sequence.corpus.units.length,
+      contexts: sequence.corpus.contexts.length,
+    };
   }
 
   private async runCycleAgainstSharedState(
@@ -309,6 +314,8 @@ async function runCycleInline(
   // Resolve corpus context IDs to runtime IDs via the map we stored at seed time.
   const contextIdMap: Map<string, string> =
     (oc as any).__corpusContextIdMap ?? new Map<string, string>();
+  const sharedCorpusSize: { units: number; contexts: number } =
+    (oc as any).__corpusSize ?? { units: 0, contexts: 0 };
 
   // Seed any scenario-specific additional units (one-time per cycle)
   for (const au of scenario.additionalUnits ?? []) {
@@ -472,7 +479,12 @@ async function runCycleInline(
       producedOutput,
       basicValidation,
       selfReportedSufficiency,
-      passedExpectations: true, // computed by caller if needed
+      passedExpectations: computePassedExpectations(
+        producedOutput,
+        basicValidation,
+        selfReportedSufficiency,
+        scenario.expectations,
+      ),
     },
     stats: {
       totalObjectives: scenario.objectives.length,
@@ -481,11 +493,43 @@ async function runCycleInline(
       failedAttempts,
       totalTokens,
       totalToolCalls,
-      unitsInCorpus:
-        (scenario.additionalUnits?.length ?? 0),
-      contextsInCorpus: 0, // shared corpus; reporting 0 here to mean "shared"
+      // Report actual corpus size (shared across the sequence) plus any
+      // cycle-specific additional units.
+      unitsInCorpus: sharedCorpusSize.units + (scenario.additionalUnits?.length ?? 0),
+      contextsInCorpus: sharedCorpusSize.contexts,
     },
   };
+}
+
+/**
+ * Compute passedExpectations per the scenario's expectation spec.
+ * Mirrors the logic in WalkthroughRunner for consistency.
+ */
+function computePassedExpectations(
+  producedOutput: boolean,
+  basicValidation: boolean,
+  selfReportedSufficiency: 'sufficient' | 'mostly-sufficient' | 'insufficient' | 'excessive' | null,
+  expectations: WalkthroughScenario['expectations'],
+): boolean {
+  const expect = expectations ?? {};
+  const expectOutput = expect.expectOutput !== false;
+  const expectBasic = expect.expectBasicValidation !== false;
+  const minSuff = expect.minSelfReportedSufficiency;
+
+  if (expectOutput && !producedOutput) return false;
+  if (expectBasic && !basicValidation) return false;
+  if (minSuff) {
+    if (selfReportedSufficiency == null) return false;
+    if (minSuff === 'sufficient' && selfReportedSufficiency !== 'sufficient') return false;
+    if (
+      minSuff === 'mostly-sufficient'
+      && selfReportedSufficiency !== 'sufficient'
+      && selfReportedSufficiency !== 'mostly-sufficient'
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------

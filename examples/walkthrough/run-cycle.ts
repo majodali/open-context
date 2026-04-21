@@ -24,8 +24,8 @@
  *   4. Run again with --continue → cycle N+1 runs against saved state
  */
 
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { mkdir, writeFile, readFile, rename } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { SequenceRunner, type SequenceState } from '../../src/walkthrough/sequence.js';
 import { TransformersEmbedder } from '../../src/storage/transformers-embedder.js';
@@ -93,6 +93,15 @@ async function main() {
     'examples/walkthrough/runs',
     sequence.id,
   );
+
+  // If starting a fresh sequence and the run dir already has artifacts,
+  // archive them so we don't silently overwrite. Use a timestamp suffix
+  // so each failed/completed attempt is preserved.
+  if (!isContinue && existsSync(runDir) && readdirSync(runDir).length > 0) {
+    const archivePath = `${runDir}-archive-${Date.now()}`;
+    await rename(runDir, archivePath);
+    console.log(`Archived previous attempt: ${archivePath}`);
+  }
   await mkdir(runDir, { recursive: true });
 
   const statePath = join(runDir, 'sequence-state.json');
