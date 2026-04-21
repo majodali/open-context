@@ -172,11 +172,28 @@ export class AgentActionExecutor implements ActionExecutor {
       if (action.outputSchema) {
         structuredOutput = this.parseStructuredResponse(primaryResponse);
         if (structuredOutput && typeof structuredOutput === 'object') {
-          for (const port of action.outputs) {
-            const obj = structuredOutput as Record<string, unknown>;
+          const obj = structuredOutput as Record<string, unknown>;
+
+          // Non-metadata output ports (exclude 'response' + 'feedback' which
+          // are always populated separately).
+          const businessPorts = action.outputs.filter(
+            (p) => p.name !== 'response' && p.name !== 'feedback',
+          );
+
+          // Primary mapping: by key name.
+          for (const port of businessPorts) {
             if (port.name in obj) {
               outputs[port.name] = obj[port.name];
             }
+          }
+
+          // Common case for meta-actions: the schema describes the ONE
+          // business output port's content directly, so no top-level key in
+          // the parsed object matches the port name. If we have exactly one
+          // business port and it wasn't populated by key, assign the whole
+          // parsed object to it.
+          if (businessPorts.length === 1 && !(businessPorts[0].name in obj)) {
+            outputs[businessPorts[0].name] = structuredOutput;
           }
         }
       }
