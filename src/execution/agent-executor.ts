@@ -510,6 +510,8 @@ export class AgentActionExecutor implements ActionExecutor {
     ];
 
     // If the action has an output schema, include it in instructions
+    // along with explicit enum constraints and a minimal valid example.
+    // This reduces first-attempt schema-validation failures on enum values.
     if (action.outputSchema) {
       instructionLines.push('');
       instructionLines.push('### Output Format');
@@ -517,6 +519,28 @@ export class AgentActionExecutor implements ActionExecutor {
       instructionLines.push('```json');
       instructionLines.push(JSON.stringify(action.outputSchema, null, 2));
       instructionLines.push('```');
+
+      const enumConstraints = extractEnumConstraints(action.outputSchema);
+      if (enumConstraints.length > 0) {
+        instructionLines.push('');
+        instructionLines.push(
+          '**STRICT ENUM VALUES** — these fields must match exactly (same case, ' +
+          'same punctuation, no synonyms or paraphrases):',
+        );
+        for (const c of enumConstraints) {
+          const values = c.values.map((v) => `"${v}"`).join(' | ');
+          instructionLines.push(`- \`${c.path}\`: ${values}`);
+        }
+      }
+
+      const example = buildMinimalExample(action.outputSchema);
+      if (example !== undefined) {
+        instructionLines.push('');
+        instructionLines.push('**Minimal valid example** (you must include ALL required fields):');
+        instructionLines.push('```json');
+        instructionLines.push(JSON.stringify(example, null, 2));
+        instructionLines.push('```');
+      }
     }
 
     if (action.validations.length > 0) {
@@ -626,4 +650,122 @@ export class AgentActionExecutor implements ActionExecutor {
       return true;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Schema-to-prompt helpers (for stricter first-attempt compliance)
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk a JSON Schema and extract all enum constraints with their JSON paths.
+ * Used to render explicit enum lists in the agent's instructions — LLMs
+ * frequently paraphrase enum values unless they are called out.
+ */
+export function extractEnumConstraints(
+  schema: Record<string, unknown>,
+): { path: string; values: string[] }[] {
+  const out: { path: string; values: string[] }[] = [];
+
+  function walk(node: unknown, path: string): void {
+    if (!node || typeof node !== 'object') return;
+    const n = node as Record<string, unknown>;
+
+    // Enum at this level
+    if (Array.isArray(n.enum)) {
+      const values = n.enum.filter((v) => typeof v === 'string') as string[];
+      if (values.length > 0) {
+        out.push({ path: path || '$', values });
+      }
+    }
+
+    // Properties
+    if (n.properties && typeof n.properties === 'object') {
+      const props = n.properties as Record<string, unknown>;
+      for (const [key, sub] of Object.entries(props)) {
+        walk(sub, path ? `${path}.${key}` : key);
+      }
+    }
+
+    // Array items
+    if (n.items) {
+      walk(n.items, `${path}[]`);
+    }
+
+    // Union/oneOf/anyOf — walk branches
+    for (const branchKey of ['oneOf', 'anyOf', 'allOf']) {
+      const branch = n[branchKey];
+      if (Array.isArray(branch)) {
+        for (const sub of branch) walk(sub, path);
+      }
+    }
+  }
+
+  walk(schema, '');
+  return out;
+}
+
+/**
+ * Build a minimal valid example object for a JSON Schema — fills in required
+ * fields with placeholder values that match their types (and use the first
+ * enum value where an enum is specified). Optional fields are omitted.
+ * Best-effort; meant for prompt guidance, not strict validation.
+ */
+export function buildMinimalExample(schema: Record<string, unknown>): unknown {
+  function build(node: unknown): unknown {
+    if (!node || typeof node !== 'object') return null;
+    const n = node as Record<string, unknown>;
+
+    // Enum wins over type — use first allowed value
+    if (Array.isArray(n.enum) && n.enum.length > 0) {
+      return n.enum[0];
+    }
+
+    const type = typeof n.type === 'string' ? n.type : undefined;
+    switch (type) {
+      case 'object': {
+        const result: Record<string, unknown> = {};
+        const required = Array.isArray(n.required) ? (n.required as string[]) : [];
+        const properties = (n.properties as Record<string, unknown>) ?? {};
+        for (const key of required) {
+          const sub = properties[key];
+          if (sub !== undefined) {
+            result[key] = build(sub);
+          } else {
+            result[key] = null;
+          }
+        }
+        return result;
+      }
+      case 'array': {
+        // One-element example array using the items schema (if present)
+        if (n.items) return [build(n.items)];
+        return [];
+      }
+      case 'string':
+        // Use description or name hint if available, else "example"
+        if (typeof n.description === 'string' && n.description.length < 40) {
+          return `example-${n.description.replace(/\s+/g, '-').toLowerCase().slice(0, 20)}`;
+        }
+        return 'example';
+      case 'number':
+        if (typeof n.minimum === 'number' && typeof n.maximum === 'number') {
+          return (n.minimum + n.maximum) / 2;
+        }
+        if (typeof n.minimum === 'number') return n.minimum;
+        if (typeof n.maximum === 'number') return n.maximum;
+        return 0.5;
+      case 'integer':
+        if (typeof n.minimum === 'number') return Math.ceil(n.minimum);
+        return 1;
+      case 'boolean':
+        return true;
+      case 'null':
+        return null;
+      default:
+        // Unknown type — omit
+        return null;
+    }
+  }
+
+  return build(schema);
 }

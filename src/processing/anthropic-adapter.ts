@@ -182,14 +182,23 @@ export class AnthropicAgentAdapter implements AgentAdapter {
       // User message with tool results
       if (turn.toolResponses.length > 0) {
         const userContent: Anthropic.ContentBlockParam[] = turn.toolResponses.map(
-          (tr) => ({
-            type: 'tool_result',
-            tool_use_id: tr.id,
-            content: typeof tr.content === 'string'
-              ? tr.content
-              : JSON.stringify(tr.content),
-            is_error: !tr.success,
-          }),
+          (tr) => {
+            // Anthropic rejects empty content when is_error is true.
+            // Substitute a placeholder so the conversation can continue.
+            let content =
+              typeof tr.content === 'string'
+                ? tr.content
+                : JSON.stringify(tr.content);
+            if (!tr.success && (!content || content.trim() === '')) {
+              content = tr.error ?? 'Tool call failed (no error detail provided).';
+            }
+            return {
+              type: 'tool_result' as const,
+              tool_use_id: tr.id,
+              content,
+              is_error: !tr.success,
+            };
+          },
         );
         messages.push({ role: 'user', content: userContent });
       }

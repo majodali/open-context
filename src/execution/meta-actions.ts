@@ -313,26 +313,40 @@ function classifyObjectiveAction(contextId: string): ActionDefinition {
       'sparse or empty, that is fine — return empty matches and document gaps.',
     parameters: [],
     queryTemplates: [
+      // Prefer formal domain-model entries if they exist (highest priority),
+      // but don't rely on them — fall back to general knowledge about the
+      // concepts referenced by the objective.
       {
         purpose: 'domain-model-types',
         query: 'Resource types and their properties relevant to: {{objectiveDescription}}',
         contentTypes: ['domain-entity'],
-        maxResults: 30,
+        maxResults: 15,
         priority: 10,
       },
       {
         purpose: 'domain-model-resources',
         query: 'Existing resources mentioned or related to: {{objectiveDescription}}',
         contentTypes: ['domain-resource'],
-        maxResults: 20,
+        maxResults: 10,
         priority: 9,
       },
       {
         purpose: 'domain-model-relationships',
         query: 'Relationships between concepts in: {{objectiveDescription}}',
         contentTypes: ['domain-relationship'],
-        maxResults: 15,
+        maxResults: 10,
         priority: 8,
+      },
+      // Broad knowledge retrieval — no contentType filter. Finds any units
+      // (facts, rules, instructions, decisions) discussing the concepts in
+      // the objective. Relevance scoring orders these; the agent sees all
+      // of them and uses its judgment about which concepts are the domain
+      // types and instances.
+      {
+        purpose: 'general-concept-knowledge',
+        query: 'Concepts, entities, constraints, and relationships referenced in: {{objectiveDescription}}',
+        maxResults: 25,
+        priority: 7,
       },
     ],
     validations: [
@@ -397,6 +411,13 @@ function clarifyObjectiveAction(contextId: string): ActionDefinition {
         contentTypes: ['objective', 'plan', 'fact'],
         maxResults: 10,
         priority: 6,
+      },
+      // Broad fallback — ensures we include context even if narrow filters miss.
+      {
+        purpose: 'general-objective-context',
+        query: 'Domain concepts, constraints, practices, and methodology relevant to: {{objectiveDescription}}',
+        maxResults: 20,
+        priority: 5,
       },
     ],
     validations: [
@@ -513,9 +534,16 @@ function selectActionsAction(contextId: string): ActionDefinition {
         purpose: 'action-selection-guidance',
         query: 'Principles, heuristics, and learnings about choosing between candidate actions and creating new ones',
         contentTypes: ['rule', 'instruction', 'learning'],
-        tags: ['action-selection', 'meta-process'],
         maxResults: 10,
         priority: 8,
+      },
+      // Broad methodology context — selection often depends on general planning
+      // practices (decompose, consider alternatives, risk-first).
+      {
+        purpose: 'methodology-for-selection',
+        query: 'Methodology and planning practices relevant to selecting actions or structuring work',
+        maxResults: 15,
+        priority: 7,
       },
     ],
     validations: [
@@ -573,6 +601,13 @@ function executeActionsAction(contextId: string): ActionDefinition {
         contentTypes: ['plan', 'plan-dag', 'domain-resource'],
         maxResults: 20,
         priority: 10,
+      },
+      // Broad fallback — find any guidance about executing the selected actions.
+      {
+        purpose: 'general-execution-context',
+        query: 'Practices, constraints, and prior knowledge relevant to executing: {{selection}}',
+        maxResults: 20,
+        priority: 7,
       },
     ],
     validations: [
@@ -636,9 +671,15 @@ function incorporateResultsAction(contextId: string): ActionDefinition {
         purpose: 'curation-guidance',
         query: 'Curation principles and learning practices for incorporating action results',
         contentTypes: ['rule', 'instruction'],
-        tags: ['curation', 'learning'],
         maxResults: 10,
         priority: 7,
+      },
+      // Broad fallback to find relevant domain knowledge or lessons.
+      {
+        purpose: 'general-incorporation-context',
+        query: 'Domain knowledge, lessons, observations, and prior outcomes relevant to: {{clarifiedObjective}}',
+        maxResults: 20,
+        priority: 5,
       },
     ],
     validations: [
