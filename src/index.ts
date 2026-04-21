@@ -102,6 +102,22 @@ export {
   walkthroughToJson,
   type MarkdownReportOptions,
 } from './walkthrough/report.js';
+export {
+  SequenceRunner,
+  type WalkthroughSequence,
+  type CycleSpec,
+  type SequenceState,
+  type SequenceRunnerDeps,
+} from './walkthrough/sequence.js';
+export {
+  INITIAL_BACKLOG,
+  filterBacklog,
+  formatBacklog,
+  type BacklogEntry,
+  type BacklogFilter,
+  type ScenarioStatus,
+  type FamiliarityLevel,
+} from './walkthrough/backlog.js';
 
 // Benchmark
 export * from './benchmark/types.js';
